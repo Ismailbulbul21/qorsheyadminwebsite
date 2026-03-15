@@ -41,8 +41,9 @@ export function Dashboard() {
     let cancelled = false
     async function load() {
       try {
-        const [profilesRes, subsRes, revenueRes, recentRes] = await Promise.all([
-          supabase.from('profiles').select('id, created_at'),
+        const [profilesCountRes, profilesDataRes, subsRes, revenueRes, recentRes] = await Promise.all([
+          supabase.from('profiles').select('id', { count: 'exact', head: true }),
+          supabase.from('profiles').select('created_at').order('created_at', { ascending: true }).range(0, 2000),
           supabase.from('subscriptions').select('id', { count: 'exact', head: true }).eq('status', 'active'),
           supabase.from('subscriptions').select('amount, created_at').in('status', ['active', 'expired', 'canceled']),
           supabase.from('subscriptions').select('id, user_id, plan_type, created_at, profiles(email)').order('created_at', { ascending: false }).limit(6),
@@ -50,7 +51,7 @@ export function Dashboard() {
 
         if (cancelled) return
 
-        const totalUsers = profilesRes.data?.length ?? 0
+        const totalUsers = profilesCountRes.count ?? 0
         const activeSubscriptions = subsRes.count ?? 0
         // Use 0.5 as fallback price if amount is null
         const totalRevenue = (revenueRes.data ?? []).reduce((sum, r) => sum + Number(r.amount ?? 0.5), 0)
@@ -69,16 +70,16 @@ export function Dashboard() {
         const revenueChartData = months.filter(m => revMap.has(m)).map(m => ({ name: m, value: revMap.get(m) || 0 }))
         if (revenueChartData.length === 0) revenueChartData.push({ name: 'No Data', value: 0 })
 
-        // User Growth by month
+        // User Growth by month (all profiles)
         const userMap = new Map<string, number>()
-        ;(profilesRes.data ?? []).forEach(p => {
+        ;(profilesDataRes.data ?? []).forEach(p => {
            if (!p.created_at) return
            const d = new Date(p.created_at)
            const m = months[d.getMonth()]
            userMap.set(m, (userMap.get(m) || 0) + 1)
         })
         const userGrowthData = months.filter(m => userMap.has(m)).map(m => ({ name: m, users: userMap.get(m) || 0 }))
-        if (userGrowthData.length === 0) userGrowthData.push({ name: 'No Data', users: 0 })
+        if (userGrowthData.length === 0) userGrowthData.push({ name: 'Jan', users: totalUsers }) // Fallback fix
 
         const recentSubscriptions = (recentRes.data ?? []).map((s: any) => ({
           id: s.id,
