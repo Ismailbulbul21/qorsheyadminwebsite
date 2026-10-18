@@ -2,9 +2,12 @@ import { createContext, useContext, useEffect, useState, useCallback, type React
 import { supabase } from '../lib/supabase'
 import type { User } from '@supabase/supabase-js'
 
+export type AdminRole = 'full' | 'viewer'
+
 type AuthState = {
   user: User | null
   isAdmin: boolean | null
+  adminRole: AdminRole | null
   loading: boolean
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>
   signOut: () => Promise<void>
@@ -16,25 +19,31 @@ const AuthContext = createContext<AuthState | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null)
+  const [adminRole, setAdminRole] = useState<AdminRole | null>(null)
   const [loading, setLoading] = useState(true)
 
   const checkAdmin = useCallback(async (uid: string) => {
     const { data, error } = await supabase
       .from('admins')
-      .select('id')
+      .select('role')
       .eq('user_id', uid)
       .maybeSingle()
-    if (error) {
+    if (error || !data) {
       setIsAdmin(false)
+      setAdminRole(null)
       return
     }
-    setIsAdmin(!!data)
+    setIsAdmin(true)
+    setAdminRole((data.role as AdminRole) ?? 'full')
   }, [])
 
   const refreshAdmin = useCallback(async () => {
     const { data: { user: u } } = await supabase.auth.getUser()
     if (u) await checkAdmin(u.id)
-    else setIsAdmin(false)
+    else {
+      setIsAdmin(false)
+      setAdminRole(null)
+    }
   }, [checkAdmin])
 
   useEffect(() => {
@@ -44,6 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         checkAdmin(session.user.id).then(() => setLoading(false))
       } else {
         setIsAdmin(false)
+        setAdminRole(null)
         setLoading(false)
       }
     })
@@ -54,6 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         checkAdmin(session.user.id).then(() => setLoading(false))
       } else {
         setIsAdmin(false)
+        setAdminRole(null)
         setLoading(false)
       }
     })
@@ -70,10 +81,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut()
     setUser(null)
     setIsAdmin(false)
+    setAdminRole(null)
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, isAdmin, loading, signIn, signOut, refreshAdmin }}>
+    <AuthContext.Provider value={{ user, isAdmin, adminRole, loading, signIn, signOut, refreshAdmin }}>
       {children}
     </AuthContext.Provider>
   )

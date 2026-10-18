@@ -9,9 +9,10 @@ import { Subscriptions } from './pages/Subscriptions'
 import { SubscriptionDetail } from './pages/SubscriptionDetail'
 import { Revenue } from './pages/Revenue'
 import { Pricing } from './pages/Pricing'
+import { ViewerDashboard } from './pages/ViewerDashboard'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, isAdmin, loading, signOut } = useAuth()
+  const { user, isAdmin, adminRole, loading, signOut } = useAuth()
 
   if (loading) {
     return (
@@ -39,6 +40,9 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     )
+  }
+  if (adminRole === 'viewer') {
+    return <ViewerDashboard />
   }
   return <>{children}</>
 }
