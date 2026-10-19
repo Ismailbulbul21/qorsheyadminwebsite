@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { Users, CreditCard, BarChart3, LogOut, ShoppingBag } from 'lucide-react'
+import { Users, CreditCard, BarChart3, LogOut, ShoppingBag, CalendarRange } from 'lucide-react'
 import {
   BarChart,
   Bar,
@@ -38,6 +38,15 @@ const PLAN_COLORS: Record<string, string> = {
 
 function toUTCDateStr(d: Date) {
   return d.toISOString().slice(0, 10)
+}
+
+function formatDisplayDate(dayStr: string) {
+  return new Date(`${dayStr}T00:00:00Z`).toLocaleDateString(undefined, {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
 }
 
 function buildPeriods() {
@@ -83,21 +92,39 @@ function buildPeriods() {
   ]
 }
 
+const TODAY_STR = toUTCDateStr(new Date())
+
 export function ViewerDashboard() {
   const { user, signOut } = useAuth()
   const [raw, setRaw] = useState<RawStats | null>(null)
   const [periodKey, setPeriodKey] = useState('thisMonth')
+  const [customStart, setCustomStart] = useState(TODAY_STR)
+  const [customEnd, setCustomEnd] = useState(TODAY_STR)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const periods = useMemo(buildPeriods, [])
-  const activePeriod = periods.find((p) => p.key === periodKey) ?? periods[2]
+  const fixedPeriods = useMemo(buildPeriods, [])
+
+  const activePeriod = useMemo(() => {
+    if (periodKey === 'custom') {
+      const valid = Boolean(customStart) && Boolean(customEnd) && customStart <= customEnd
+      return {
+        key: 'custom',
+        label: 'Custom Range',
+        description: valid
+          ? `${formatDisplayDate(customStart)} – ${formatDisplayDate(customEnd)}`
+          : 'Pick a start and end date',
+        matches: (day: string) => valid && day >= customStart && day <= customEnd,
+      }
+    }
+    return fixedPeriods.find((p) => p.key === periodKey) ?? fixedPeriods[2]
+  }, [periodKey, customStart, customEnd, fixedPeriods])
 
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
-        const { data, error: e } = await supabase.rpc('get_viewer_dashboard_stats', { days_back: 180 })
+        const { data, error: e } = await supabase.rpc('get_viewer_dashboard_stats', { days_back: 400 })
         if (cancelled) return
         if (e) throw e
         setRaw(data as RawStats)
@@ -205,7 +232,7 @@ export function ViewerDashboard() {
               <p className="text-sm text-slate-500">{activePeriod.description}</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              {periods.map((p) => (
+              {fixedPeriods.map((p) => (
                 <button
                   key={p.key}
                   onClick={() => setPeriodKey(p.key)}
@@ -218,8 +245,47 @@ export function ViewerDashboard() {
                   {p.label}
                 </button>
               ))}
+              <button
+                onClick={() => setPeriodKey('custom')}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
+                  periodKey === 'custom'
+                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <CalendarRange className="w-4 h-4" />
+                Custom Range
+              </button>
             </div>
           </div>
+
+          {periodKey === 'custom' && (
+            <div className="flex flex-wrap items-center gap-3 bg-slate-50 border border-slate-100 rounded-2xl p-4 mt-3">
+              <div className="flex items-center gap-2">
+                <label htmlFor="custom-start" className="text-xs font-bold text-slate-500 uppercase tracking-wider">From</label>
+                <input
+                  id="custom-start"
+                  type="date"
+                  value={customStart}
+                  max={customEnd || TODAY_STR}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <label htmlFor="custom-end" className="text-xs font-bold text-slate-500 uppercase tracking-wider">To</label>
+                <input
+                  id="custom-end"
+                  type="date"
+                  value={customEnd}
+                  min={customStart}
+                  max={TODAY_STR}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
+                />
+              </div>
+            </div>
+          )}
 
           <div className="flex items-center gap-2 mt-4 mb-2">
             <ShoppingBag className="w-4 h-4 text-slate-400" />
