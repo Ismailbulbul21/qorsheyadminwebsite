@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { Users, CreditCard, BarChart3, LogOut } from 'lucide-react'
+import { Users, CreditCard, BarChart3, LogOut, ShoppingBag } from 'lucide-react'
 import {
   BarChart,
   Bar,
+  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
+  LabelList,
   ResponsiveContainer,
 } from 'recharts'
 
@@ -19,34 +20,78 @@ type RawStats = {
   dailyPlanCounts: { day: string; plan_type: string; count: number }[]
 }
 
-const PLAN_ORDER = ['monthly', '3month', '6month', 'week', 'yearly']
+const PLAN_ORDER = ['week', 'monthly', '3month', '6month', 'yearly']
 const PLAN_LABELS: Record<string, string> = {
+  week: 'Weekly',
   monthly: 'Monthly',
   '3month': '3 Month',
   '6month': '6 Month',
-  week: 'Weekly',
   yearly: 'Yearly',
 }
 const PLAN_COLORS: Record<string, string> = {
+  week: '#94a3b8',
   monthly: '#6366f1',
   '3month': '#10b981',
   '6month': '#f59e0b',
-  week: '#94a3b8',
   yearly: '#ef4444',
 }
 
-const WINDOWS = [
-  { label: '1 Month', months: 1 },
-  { label: '3 Months', months: 3 },
-  { label: '6 Months', months: 6 },
-]
+function toUTCDateStr(d: Date) {
+  return d.toISOString().slice(0, 10)
+}
+
+function buildPeriods() {
+  const now = new Date()
+  const todayStr = toUTCDateStr(now)
+
+  const yesterdayDate = new Date(now)
+  yesterdayDate.setUTCDate(yesterdayDate.getUTCDate() - 1)
+  const yesterdayStr = toUTCDateStr(yesterdayDate)
+
+  const thisMonthPrefix = todayStr.slice(0, 7)
+  const thisMonthLabel = now.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' })
+
+  const lastMonthDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1))
+  const lastMonthPrefix = toUTCDateStr(lastMonthDate).slice(0, 7)
+  const lastMonthLabel = lastMonthDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' })
+
+  return [
+    {
+      key: 'yesterday',
+      label: 'Yesterday',
+      description: new Date(yesterdayStr).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }),
+      matches: (day: string) => day === yesterdayStr,
+    },
+    {
+      key: 'today',
+      label: 'Today',
+      description: new Date(todayStr).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }),
+      matches: (day: string) => day === todayStr,
+    },
+    {
+      key: 'thisMonth',
+      label: 'This Month',
+      description: thisMonthLabel,
+      matches: (day: string) => day.startsWith(thisMonthPrefix),
+    },
+    {
+      key: 'lastMonth',
+      label: 'Last Month',
+      description: lastMonthLabel,
+      matches: (day: string) => day.startsWith(lastMonthPrefix),
+    },
+  ]
+}
 
 export function ViewerDashboard() {
   const { user, signOut } = useAuth()
   const [raw, setRaw] = useState<RawStats | null>(null)
-  const [windowMonths, setWindowMonths] = useState(3)
+  const [periodKey, setPeriodKey] = useState('thisMonth')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const periods = useMemo(buildPeriods, [])
+  const activePeriod = periods.find((p) => p.key === periodKey) ?? periods[2]
 
   useEffect(() => {
     let cancelled = false
@@ -66,37 +111,26 @@ export function ViewerDashboard() {
     return () => { cancelled = true }
   }, [])
 
-  const { chartData, planTotals, monthKeys } = useMemo(() => {
-    if (!raw) return { chartData: [], planTotals: {} as Record<string, number>, monthKeys: [] as string[] }
-
-    const byMonth = new Map<string, Record<string, number>>()
-    for (const row of raw.dailyPlanCounts) {
-      const month = row.day.slice(0, 7)
-      const entry = byMonth.get(month) ?? {}
-      entry[row.plan_type] = (entry[row.plan_type] ?? 0) + row.count
-      byMonth.set(month, entry)
-    }
-
-    const sortedMonths = Array.from(byMonth.keys()).sort()
-    const lastN = sortedMonths.slice(-windowMonths)
-
-    const data = lastN.map((month) => {
-      const entry = byMonth.get(month) ?? {}
-      const [y, m] = month.split('-')
-      const label = new Date(Number(y), Number(m) - 1, 1).toLocaleDateString(undefined, { month: 'short', year: '2-digit' })
-      return { month: label, ...entry }
-    })
+  const { chartData, planTotals, totalPurchases } = useMemo(() => {
+    if (!raw) return { chartData: [], planTotals: {} as Record<string, number>, totalPurchases: 0 }
 
     const totals: Record<string, number> = {}
-    for (const month of lastN) {
-      const entry = byMonth.get(month) ?? {}
-      for (const [plan, count] of Object.entries(entry)) {
-        totals[plan] = (totals[plan] ?? 0) + count
-      }
+    for (const row of raw.dailyPlanCounts) {
+      if (!activePeriod.matches(row.day)) continue
+      totals[row.plan_type] = (totals[row.plan_type] ?? 0) + row.count
     }
 
-    return { chartData: data, planTotals: totals, monthKeys: lastN }
-  }, [raw, windowMonths])
+    const data = PLAN_ORDER.map((plan) => ({
+      plan,
+      label: PLAN_LABELS[plan],
+      count: totals[plan] ?? 0,
+      fill: PLAN_COLORS[plan],
+    }))
+
+    const total = Object.values(totals).reduce((sum, v) => sum + v, 0)
+
+    return { chartData: data, planTotals: totals, totalPurchases: total }
+  }, [raw, activePeriod])
 
   if (loading) {
     return (
@@ -117,8 +151,6 @@ export function ViewerDashboard() {
   }
 
   if (!raw) return null
-
-  const plansPresent = PLAN_ORDER.filter((p) => chartData.some((d) => p in d))
 
   return (
     <div className="min-h-screen bg-[#f8fafc]">
@@ -165,80 +197,73 @@ export function ViewerDashboard() {
           </div>
         </div>
 
+        {/* Period Selector */}
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-          <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-4">
             <div>
-              <h3 className="text-lg font-bold text-slate-900">Subscriptions by Plan</h3>
-              <p className="text-sm text-slate-500">Monthly, 3-month, and 6-month plan activity</p>
+              <h3 className="text-lg font-bold text-slate-900">Plan Purchases</h3>
+              <p className="text-sm text-slate-500">{activePeriod.description}</p>
             </div>
-            <div className="flex gap-2">
-              {WINDOWS.map((w) => (
+            <div className="flex flex-wrap gap-2">
+              {periods.map((p) => (
                 <button
-                  key={w.months}
-                  onClick={() => setWindowMonths(w.months)}
+                  key={p.key}
+                  onClick={() => setPeriodKey(p.key)}
                   className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
-                    windowMonths === w.months
+                    periodKey === p.key
                       ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  {w.label}
+                  {p.label}
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="h-[320px]">
+          <div className="flex items-center gap-2 mt-4 mb-2">
+            <ShoppingBag className="w-4 h-4 text-slate-400" />
+            <span className="text-sm text-slate-500">
+              <span className="font-bold text-slate-900">{totalPurchases.toLocaleString()}</span> total purchases
+            </span>
+          </div>
+
+          <div className="h-[280px] mt-4">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData}>
+              <BarChart data={chartData} margin={{ top: 24, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 13, fontWeight: 600 }} />
                 <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} allowDecimals={false} />
                 <Tooltip
+                  cursor={{ fill: '#f8fafc' }}
                   contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                  formatter={(value, name) => [value, PLAN_LABELS[String(name)] ?? String(name)]}
+                  formatter={(value) => [value, 'Subscribers']}
                 />
-                <Legend formatter={(name) => PLAN_LABELS[String(name)] ?? String(name)} />
-                {plansPresent.map((plan) => (
-                  <Bar key={plan} dataKey={plan} stackId="plans" fill={PLAN_COLORS[plan]} radius={plan === plansPresent[plansPresent.length - 1] ? [6, 6, 0, 0] : undefined} />
-                ))}
+                <Bar dataKey="count" radius={[10, 10, 0, 0]} maxBarSize={72}>
+                  {chartData.map((d) => (
+                    <Cell key={d.plan} fill={d.fill} />
+                  ))}
+                  <LabelList dataKey="count" position="top" style={{ fill: '#0f172a', fontWeight: 700, fontSize: 14 }} />
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-          <div className="p-6 border-b border-slate-100">
-            <h3 className="text-lg font-bold text-slate-900">Plan Totals — Last {windowMonths} Month{windowMonths > 1 ? 's' : ''}</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="bg-slate-50/50">
-                  <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Plan</th>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider text-right">Subscribers</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {PLAN_ORDER.filter((p) => planTotals[p] > 0).map((plan) => (
-                  <tr key={plan} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: PLAN_COLORS[plan] }}></div>
-                        <span className="text-sm font-semibold text-slate-700">{PLAN_LABELS[plan]}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-right text-sm font-bold text-slate-900">{planTotals[plan].toLocaleString()}</td>
-                  </tr>
-                ))}
-                {monthKeys.length === 0 && (
-                  <tr>
-                    <td colSpan={2} className="px-6 py-10 text-center text-slate-400 font-medium">No subscription activity in this window.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+        {/* Plan Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+          {PLAN_ORDER.map((plan) => (
+            <div key={plan} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 text-center">
+              <div
+                className="w-10 h-10 rounded-xl flex items-center justify-center mx-auto mb-3"
+                style={{ backgroundColor: `${PLAN_COLORS[plan]}1a` }}
+              >
+                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: PLAN_COLORS[plan] }}></div>
+              </div>
+              <p className="text-2xl font-black text-slate-900">{(planTotals[plan] ?? 0).toLocaleString()}</p>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mt-1">{PLAN_LABELS[plan]}</p>
+            </div>
+          ))}
         </div>
       </main>
     </div>
